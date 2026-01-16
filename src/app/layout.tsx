@@ -7,7 +7,7 @@ import Footer from "@/components/Footer"; // Import Footer
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Print-Link | BVM Engineering",
+  title: "Printify",
   description: "Remote printing service for students.",
 };
 
