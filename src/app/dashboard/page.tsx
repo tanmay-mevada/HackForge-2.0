@@ -169,6 +169,8 @@ export default function Dashboard() {
         throw new Error(data.error || 'Upload failed')
       }
 
+      // After successful upload, redirect user to Print Settings step
+      // passing uploadId and shopId as query params.
       setFile(null)
       setUploadSuccess(true)
       
