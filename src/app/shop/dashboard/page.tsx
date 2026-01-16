@@ -19,13 +19,36 @@ export default function ShopDashboard() {
   const router = useRouter()
   const supabase = createClient()
 
-  const [shopData, setShopData] = useState<{ id: string; name: string; location: string; bw_price: number; color_price: number } | null>(null)
+  const [shopData, setShopData] = useState<{ id: string; name: string; location: string; bw_price: number; color_price: number; is_open: boolean } | null>(null)
   const [orders, setOrders] = useState<{ id: string; file_name: string; file_size: number; status: string; created_at: string; user_id: string }[]>([])
   const [loading, setLoading] = useState(true)
   const [loadingOrders, setLoadingOrders] = useState(false)
   const [showOtpModal, setShowOtpModal] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState<string | null>(null)
   const [otp, setOtp] = useState('')
+
+  const handleToggle = async () => {
+    if (!shopData) return
+
+    try {
+      const newStatus = !shopData.is_open
+      const { data, error } = await supabase
+        .from('shops')
+        .update({ is_open: newStatus })
+        .eq('id', shopData.id)
+        .select()
+        .single()
+
+      if (error) {
+        throw error
+      }
+
+      setShopData(data)
+    } catch (error) {
+      console.error('Failed to toggle shop status:', error)
+      alert('Failed to update shop status. Please try again.')
+    }
+  }
 
   useEffect(() => {
     const init = async () => {
@@ -222,14 +245,36 @@ export default function ShopDashboard() {
                 {shopData?.name || 'Shop Dashboard'}
               </h1>
               <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse"></span>
-                <span className="text-xs font-medium text-green-700 bg-green-50 px-2 py-0.5 rounded-full">
-                  Shop Online
+              <span
+                  className={`w-2.5 h-2.5 rounded-full ${
+                    shopData?.is_open ? 'bg-green-500 animate-pulse' : 'bg-red-500'
+                  }`}
+                ></span>
+                <span
+                  className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                    shopData?.is_open
+                      ? 'text-green-700 bg-green-50'
+                      : 'text-red-700 bg-red-50'
+                  }`}
+                >
+                  {shopData?.is_open ? 'Shop Online' : 'Shop Offline'}
                 </span>
               </div>
             </div>
           </div>
           <div className="flex items-center gap-4">
+          <button
+              onClick={handleToggle}
+              className={`relative inline-flex items-center h-6 rounded-full w-11 transition-colors ${
+                shopData?.is_open ? 'bg-blue-600' : 'bg-gray-300'
+              }`}
+            >
+              <span
+                className={`inline-block w-4 h-4 transform bg-white rounded-full transition-transform ${
+                  shopData?.is_open ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
             <LogoutButton />
           </div>
         </div>
