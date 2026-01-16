@@ -2,14 +2,35 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { ArrowLeft, Printer, ChevronDown } from 'lucide-react'
+import { 
+  ArrowLeft, 
+  Printer, 
+  FileText, 
+  Layers, 
+  Copy, 
+  Check, 
+  Loader2, 
+  CreditCard,
+  Droplet,
+  Palette,
+  Paperclip,
+  Scroll,
+  Sparkles,
+  Ban,
+  Files,
+  Sheet,
+  TrendingDown
+} from 'lucide-react'
 import { createClient } from '@/utils/supabase/client'
+import { Toaster, toast } from 'sonner'
+import JSZip from 'jszip'
 
+// --- Interfaces ---
 interface PrintSettings {
   color: 'bw' | 'color'
   sides: 'single' | 'double'
   copies: number
-  binding: 'none' | 'staple' | 'spiral'
+  binding: 'none' | 'staple' | 'spiral' | 'lamination'
 }
 
 interface ShopData {
@@ -17,6 +38,8 @@ interface ShopData {
   location: string
   bw_price: number
   color_price: number
+  spiral_price: number
+  lamination_price: number
 }
 
 export default function PrintSettingsPage() {
@@ -27,9 +50,10 @@ export default function PrintSettingsPage() {
   const uploadId = searchParams.get('uploadId')
   const shopId = searchParams.get('shopId')
 
+  // --- State ---
   const [settings, setSettings] = useState<PrintSettings>({
     color: 'bw',
-    sides: 'single',
+    sides: 'single', // Default to single
     copies: 1,
     binding: 'none',
   })
@@ -37,314 +61,481 @@ export default function PrintSettingsPage() {
   const [shopData, setShopData] = useState<ShopData | null>(null)
   const [loading, setLoading] = useState(true)
   const [processing, setProcessing] = useState(false)
+  
+  // Page Counting State
+  const [pageCount, setPageCount] = useState<number>(0)
+  const [countingPages, setCountingPages] = useState<boolean>(true)
+  const [fileName, setFileName] = useState<string>('')
 
+  // --- 1. Load Shop Data ---
   useEffect(() => {
     const loadShopData = async () => {
+      if (!shopId) { router.push('/dashboard'); return }
       try {
-        if (!shopId) {
-          router.push('/dashboard')
-          return
-        }
-
-        const { data: shop } = await supabase
+        const { data: shop, error } = await supabase
           .from('shops')
-          .select('name, location, bw_price, color_price')
+          .select('name, location, bw_price, color_price, spiral_price, lamination_price')
           .eq('id', shopId)
           .single()
 
-        if (shop) {
-          setShopData(shop)
-        } else {
-          router.push('/dashboard')
-        }
+        if (error || !shop) throw new Error('Shop not found')
+        setShopData(shop)
       } catch (err) {
-        console.error('Error loading shop data:', err)
+        toast.error('Failed to load shop details')
         router.push('/dashboard')
       } finally {
         setLoading(false)
       }
     }
-
     loadShopData()
   }, [shopId, router, supabase])
 
+  // --- 2. Fetch File & Count Pages ---
+  useEffect(() => {
+    const analyzeFile = async () => {
+      if (!uploadId) return
+      setCountingPages(true)
+
+      try {
+        // A. Fetch file info (Using your ACTUAL column names)
+        const { data: uploadData, error } = await supabase
+          .from('uploads')
+          .select('id, storage_path, file_name, user_id') // Corrected column name
+          .eq('id', uploadId)
+          .single()
+
+        if (error || !uploadData) throw new Error('File record not found')
+        if (!uploadData.storage_path) throw new Error('Storage path missing')
+        
+        setFileName(uploadData.file_name)
+
+        // B. Download file as Blob
+        const { data: fileBlob, error: downloadError } = await supabase
+          .storage
+          .from('documents') // Verify bucket name!
+          .download(uploadData.storage_path)
+
+        if (downloadError || !fileBlob) throw new Error('Download failed')
+
+        // C. Parse Pages
+        let pages = 1
+        const arrayBuffer = await fileBlob.arrayBuffer()
+        const name = uploadData.file_name.toLowerCase()
+
+        if (name.endsWith('.pdf')) {
+          pages = await countPdfPages(arrayBuffer)
+        } else if (name.endsWith('.docx')) {
+          pages = await countDocxPages(arrayBuffer)
+        }
+
+        setPageCount(pages)
+        if (pages > 1) toast.success(`Detected ${pages} pages`)
+
+      } catch (err) {
+        console.error("Page count failed:", err)
+        toast.warning('Could not auto-detect pages. Defaulting to 1.')
+        setPageCount(1)
+      } finally {
+        setCountingPages(false)
+      }
+    }
+
+    analyzeFile()
+  }, [uploadId, supabase])
+
+  // --- Helpers: Page Counting ---
+  const countPdfPages = async (buffer: ArrayBuffer): Promise<number> => {
+    try {
+      const pdfjsLib = await import('pdfjs-dist')
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
+      const pdf = await pdfjsLib.getDocument({ data: buffer }).promise
+      return pdf.numPages
+    } catch (e) {
+      console.error('PDF parsing error', e)
+      return 1
+    }
+  }
+
+  const countDocxPages = async (buffer: ArrayBuffer): Promise<number> => {
+    try {
+      const zip = await JSZip.loadAsync(buffer)
+      const appXml = await zip.file('docProps/app.xml')?.async('text')
+      
+      if (appXml) {
+        const match = appXml.match(/<Pages>(\d+)<\/Pages>/)
+        if (match && match[1]) return parseInt(match[1], 10)
+      }
+      return 1 
+    } catch (e) {
+      console.error('DOCX parsing error', e)
+      return 1
+    }
+  }
+
+  // --- 3. PRACTICAL BILL CALCULATION ---
+  
+  // Base Rate (Per Side/Impression)
+  const baseRate = settings.color === 'bw' ? (shopData?.bw_price || 0) : (shopData?.color_price || 0)
+  
+  // Total Faces to Print
+  const totalFaces = pageCount * settings.copies
+
+  // Raw Printing Cost (Without Discounts)
+  const rawPrintCost = totalFaces * baseRate
+
+  // Double-Sided Discount Logic (20% Savings)
+  // If printing double-sided, we apply a 0.8 multiplier to the print cost
+  const isDoubleSided = settings.sides === 'double'
+  const discountMultiplier = isDoubleSided ? 0.8 : 1
+  
+  const finalPrintCost = Math.ceil(rawPrintCost * discountMultiplier)
+  const savingsAmount = rawPrintCost - finalPrintCost
+
+  // Sheets Calculation
+  const sheetsUsed = isDoubleSided ? Math.ceil(pageCount / 2) * settings.copies : pageCount * settings.copies
+
+  // Binding Cost
+  const bindingPrice = 
+    settings.binding === 'staple' ? 5 : 
+    settings.binding === 'spiral' ? (shopData?.spiral_price || 25) : 
+    settings.binding === 'lamination' ? (shopData?.lamination_price || 40) : 0
+  
+  // Total Bill
+  const totalCost = finalPrintCost + bindingPrice
+
+  // --- Handler ---
   const handleContinue = async () => {
     if (!uploadId || !shopId) return
-
     setProcessing(true)
 
     try {
-      // Store print settings in the database
       const { error } = await supabase
         .from('uploads')
         .update({
-          print_color: settings.color,
-          print_sides: settings.sides,
-          print_copies: settings.copies,
-          print_binding: settings.binding,
+          // Saving simple metadata or jsonb if you prefer
+          status: 'pending_payment', 
           shop_id: shopId,
+          // You might want to save these calculated values to your DB if columns exist:
+          // total_price: totalCost,
+          // total_pages: pageCount
         })
         .eq('id', uploadId)
 
       if (error) throw error
 
-      // Redirect to payment with all parameters
-      router.push(
-        `/payment?uploadId=${uploadId}&shopId=${shopId}&printColor=${settings.color}&printSides=${settings.sides}&printCopies=${settings.copies}&printBinding=${settings.binding}`
-      )
+      // Pass calculated values to Payment Page
+      const params = new URLSearchParams({
+        uploadId: uploadId,
+        shopId: shopId,
+        amount: totalCost.toString(),
+        // Metadata for display
+        desc: `${settings.color.toUpperCase()} Print (${settings.copies} copies)`
+      })
+
+      router.push(`/payment?${params.toString()}`)
     } catch (err) {
-      console.error('Error saving print settings:', err)
-      alert('Failed to save print settings. Please try again.')
-    } finally {
+      toast.error('Failed to proceed')
       setProcessing(false)
     }
   }
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-50/50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-slate-600">Loading print settings...</p>
-        </div>
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <Loader2 className="w-10 h-10 text-blue-600 animate-spin" />
       </div>
     )
   }
 
-  const basePrice = settings.color === 'bw' ? shopData?.bw_price || 0 : shopData?.color_price || 0
-  const totalPrice = basePrice * settings.copies
-  const bindingPrice =
-    settings.binding === 'staple' ? 5 : settings.binding === 'spiral' ? 25 : 0
-  const estimatedTotal = totalPrice + bindingPrice
-
   return (
-    <div className="min-h-screen bg-slate-50/50">
-      <div className="absolute top-0 left-0 w-full h-64 bg-slate-900 -z-10" />
+    <div className="min-h-screen bg-slate-50">
+      <Toaster position="top-center" richColors />
+      
+      {/* Header */}
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+        <div className="max-w-5xl mx-auto px-6 h-16 flex items-center justify-between">
+           <button onClick={() => router.back()} className="flex items-center gap-2 text-slate-500 hover:text-slate-800 transition font-medium text-sm">
+              <ArrowLeft className="w-4 h-4" /> Back
+           </button>
+           <h1 className="text-lg font-bold text-slate-900">Configure Print</h1>
+           <div className="w-16"></div>
+        </div>
+      </header>
 
-      <main className="max-w-2xl mx-auto px-6 pt-28 pb-12">
-        {/* Back Button */}
-        <button
-          onClick={() => router.back()}
-          className="flex items-center gap-2 text-blue-600 hover:text-blue-700 mb-8 font-medium"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Back
-        </button>
-
-        {/* Main Card */}
-        <div className="bg-white rounded-3xl shadow-lg border border-slate-200 p-8">
-          <div className="flex items-center gap-3 mb-8">
-            <Printer className="w-6 h-6 text-blue-600" />
-            <h1 className="text-3xl font-bold text-slate-900">Print Settings</h1>
-          </div>
-
-          {/* Shop Info */}
-          <div className="mb-8 pb-8 border-b border-slate-200">
-            <h2 className="text-sm font-semibold text-slate-500 uppercase mb-3">
-              Selected Shop
-            </h2>
-            <div className="p-4 bg-blue-50 rounded-xl border border-blue-200">
-              <p className="text-lg font-bold text-slate-900">{shopData?.name}</p>
-              <p className="text-sm text-slate-600">{shopData?.location}</p>
-            </div>
-          </div>
-
-          {/* Print Settings Form */}
-          <div className="space-y-8 mb-8">
-            {/* Print Color */}
-            <div>
-              <h3 className="text-lg font-semibold text-slate-900 mb-4">Print Color</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <button
-                  onClick={() => setSettings({ ...settings, color: 'bw' })}
-                  className={`p-4 rounded-xl border-2 transition-all text-center ${
-                    settings.color === 'bw'
-                      ? 'border-blue-600 bg-blue-50'
-                      : 'border-slate-200 bg-white hover:border-slate-300'
-                  }`}
-                >
-                  <div className="w-16 h-16 bg-gradient-to-b from-white to-black rounded-lg mx-auto mb-3 flex items-center justify-center">
-                    <div className="text-2xl">⚫</div>
+      <main className="max-w-5xl mx-auto px-6 py-10">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+          
+          {/* --- LEFT COLUMN: SETTINGS --- */}
+          <div className="lg:col-span-2 space-y-8">
+            
+            {/* File Analysis Card */}
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-4">
+               <div className="p-3 bg-blue-50 rounded-xl">
+                  {countingPages ? <Loader2 className="w-6 h-6 text-blue-600 animate-spin"/> : <FileText className="w-6 h-6 text-blue-600"/>}
+               </div>
+               <div>
+                  <p className="text-sm text-slate-500 font-medium">Document Detected</p>
+                  <h3 className="font-bold text-slate-900 truncate max-w-[200px]">{fileName}</h3>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-bold">
+                        {countingPages ? '...' : pageCount} Pages
+                    </span>
                   </div>
-                  <p className="font-semibold text-slate-900">Black & White</p>
-                  <p className="text-sm text-slate-600 mt-1">
-                    ₹{shopData?.bw_price}/page
-                  </p>
-                </button>
+               </div>
+            </div>
 
-                <button
-                  onClick={() => setSettings({ ...settings, color: 'color' })}
-                  className={`p-4 rounded-xl border-2 transition-all text-center ${
-                    settings.color === 'color'
-                      ? 'border-blue-600 bg-blue-50'
-                      : 'border-slate-200 bg-white hover:border-slate-300'
-                  }`}
-                >
-                  <div className="w-16 h-16 bg-gradient-to-r from-red-500 via-yellow-500 to-blue-500 rounded-lg mx-auto mb-3 flex items-center justify-center">
-                    <div className="text-2xl">🌈</div>
+            {/* 1. Color Selection */}
+            <Section title="Color Mode" icon={<Printer className="w-5 h-5 text-blue-600"/>}>
+               <div className="grid grid-cols-2 gap-4">
+                  <OptionButton 
+                     selected={settings.color === 'bw'} 
+                     onClick={() => setSettings({...settings, color: 'bw'})}
+                     title="Black & White"
+                     subtitle={`₹${shopData?.bw_price}/page`}
+                     icon={<div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-900"><Droplet className="w-5 h-5 fill-slate-900" /></div>}
+                  />
+                  <OptionButton 
+                     selected={settings.color === 'color'} 
+                     onClick={() => setSettings({...settings, color: 'color'})}
+                     title="Full Color"
+                     subtitle={`₹${shopData?.color_price}/page`}
+                     icon={<div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center text-blue-600"><Palette className="w-5 h-5" /></div>}
+                  />
+               </div>
+            </Section>
+
+            {/* 2. Sides (With Discount Badge) */}
+            <Section title="Paper Sides" icon={<Files className="w-5 h-5 text-blue-600"/>}>
+               <div className="grid grid-cols-2 gap-4">
+                  <OptionButton 
+                     selected={settings.sides === 'single'} 
+                     onClick={() => setSettings({...settings, sides: 'single'})}
+                     title="Single Sided"
+                     subtitle="Standard Rate"
+                     icon={<FileText className="w-8 h-8 text-slate-400" />}
+                  />
+                  <div className="relative">
+                    <OptionButton 
+                       selected={settings.sides === 'double'} 
+                       onClick={() => setSettings({...settings, sides: 'double'})}
+                       title="Double Sided"
+                       subtitle="Save 20% on Print"
+                       icon={<Layers className="w-8 h-8 text-slate-400" />}
+                    />
+                    <div className="absolute -top-3 right-4 bg-green-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm animate-pulse">
+                        Cheaper!
+                    </div>
                   </div>
-                  <p className="font-semibold text-slate-900">Color</p>
-                  <p className="text-sm text-slate-600 mt-1">
-                    ₹{shopData?.color_price}/page
-                  </p>
-                </button>
-              </div>
-            </div>
+               </div>
+            </Section>
 
-            {/* Print Sides */}
-            <div>
-              <h3 className="text-lg font-semibold text-slate-900 mb-4">Print Sides</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <button
-                  onClick={() => setSettings({ ...settings, sides: 'single' })}
-                  className={`p-4 rounded-xl border-2 transition-all text-center ${
-                    settings.sides === 'single'
-                      ? 'border-blue-600 bg-blue-50'
-                      : 'border-slate-200 bg-white hover:border-slate-300'
-                  }`}
-                >
-                  <div className="text-3xl mb-2">📄</div>
-                  <p className="font-semibold text-slate-900">Single-sided</p>
-                  <p className="text-xs text-slate-600 mt-1">Print on one side</p>
-                </button>
+            {/* 3. Copies */}
+            <Section title="Quantity" icon={<Copy className="w-5 h-5 text-blue-600"/>}>
+               <div className="flex items-center gap-6 bg-slate-50 p-4 rounded-xl border border-slate-200 w-fit">
+                  <button 
+                    onClick={() => setSettings({...settings, copies: Math.max(1, settings.copies - 1)})}
+                    className="w-10 h-10 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 flex items-center justify-center font-bold text-lg transition shadow-sm"
+                  >-</button>
+                  <div className="text-center w-24">
+                     <span className="text-2xl font-bold text-slate-900">{settings.copies}</span>
+                     <p className="text-xs text-slate-500 uppercase font-bold">Copies</p>
+                  </div>
+                  <button 
+                    onClick={() => setSettings({...settings, copies: Math.min(100, settings.copies + 1)})}
+                    className="w-10 h-10 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 flex items-center justify-center font-bold text-lg transition shadow-sm"
+                  >+</button>
+               </div>
+            </Section>
 
-                <button
-                  onClick={() => setSettings({ ...settings, sides: 'double' })}
-                  className={`p-4 rounded-xl border-2 transition-all text-center ${
-                    settings.sides === 'double'
-                      ? 'border-blue-600 bg-blue-50'
-                      : 'border-slate-200 bg-white hover:border-slate-300'
-                  }`}
-                >
-                  <div className="text-3xl mb-2">📃</div>
-                  <p className="font-semibold text-slate-900">Double-sided</p>
-                  <p className="text-xs text-slate-600 mt-1">Save paper</p>
-                </button>
-              </div>
-            </div>
+            {/* 4. Finishing */}
+            <Section title="Binding & Finishing" icon={<Layers className="w-5 h-5 text-blue-600"/>}>
+               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <BindingOption 
+                     selected={settings.binding === 'none'} 
+                     onClick={() => setSettings({...settings, binding: 'none'})}
+                     label="None" price="Free" icon={<Ban className="w-6 h-6"/>}
+                  />
+                  <BindingOption 
+                     selected={settings.binding === 'staple'} 
+                     onClick={() => setSettings({...settings, binding: 'staple'})}
+                     label="Staple" price="+₹5" icon={<Paperclip className="w-6 h-6"/>}
+                  />
+                  <BindingOption 
+                     selected={settings.binding === 'spiral'} 
+                     onClick={() => setSettings({...settings, binding: 'spiral'})}
+                     label="Spiral" price={`+₹${shopData?.spiral_price || 25}`} icon={<Scroll className="w-6 h-6"/>}
+                  />
+                  <BindingOption 
+                     selected={settings.binding === 'lamination'} 
+                     onClick={() => setSettings({...settings, binding: 'lamination'})}
+                     label="Laminate" price={`+₹${shopData?.lamination_price || 40}`} icon={<Sparkles className="w-6 h-6"/>}
+                  />
+               </div>
+            </Section>
 
-            {/* Number of Copies */}
-            <div>
-              <h3 className="text-lg font-semibold text-slate-900 mb-4">
-                Number of Copies
-              </h3>
-              <div className="flex items-center justify-center gap-6 p-6 bg-slate-50 rounded-xl border border-slate-200">
-                <button
-                  onClick={() =>
-                    setSettings({
-                      ...settings,
-                      copies: Math.max(1, settings.copies - 1),
-                    })
-                  }
-                  className="w-12 h-12 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 transition flex items-center justify-center text-xl font-bold text-slate-600"
-                >
-                  −
-                </button>
-                <span className="text-4xl font-bold text-slate-900 w-16 text-center">
-                  {settings.copies}
-                </span>
-                <button
-                  onClick={() =>
-                    setSettings({
-                      ...settings,
-                      copies: Math.min(999, settings.copies + 1),
-                    })
-                  }
-                  className="w-12 h-12 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 transition flex items-center justify-center text-xl font-bold text-slate-600"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-
-            {/* Binding Option */}
-            <div>
-              <h3 className="text-lg font-semibold text-slate-900 mb-4">
-                Binding Option
-              </h3>
-              <div className="grid grid-cols-3 gap-4">
-                <button
-                  onClick={() => setSettings({ ...settings, binding: 'none' })}
-                  className={`p-4 rounded-xl border-2 transition-all text-center ${
-                    settings.binding === 'none'
-                      ? 'border-blue-600 bg-blue-50'
-                      : 'border-slate-200 bg-white hover:border-slate-300'
-                  }`}
-                >
-                  <p className="text-3xl mb-2">📋</p>
-                  <p className="font-semibold text-slate-900 text-sm">No Binding</p>
-                  <p className="text-xs text-slate-600 mt-2">₹0</p>
-                </button>
-
-                <button
-                  onClick={() => setSettings({ ...settings, binding: 'staple' })}
-                  className={`p-4 rounded-xl border-2 transition-all text-center ${
-                    settings.binding === 'staple'
-                      ? 'border-blue-600 bg-blue-50'
-                      : 'border-slate-200 bg-white hover:border-slate-300'
-                  }`}
-                >
-                  <p className="text-3xl mb-2">📌</p>
-                  <p className="font-semibold text-slate-900 text-sm">Staple</p>
-                  <p className="text-xs text-slate-600 mt-2">+₹5</p>
-                </button>
-
-                <button
-                  onClick={() => setSettings({ ...settings, binding: 'spiral' })}
-                  className={`p-4 rounded-xl border-2 transition-all text-center ${
-                    settings.binding === 'spiral'
-                      ? 'border-blue-600 bg-blue-50'
-                      : 'border-slate-200 bg-white hover:border-slate-300'
-                  }`}
-                >
-                  <p className="text-3xl mb-2">🌀</p>
-                  <p className="font-semibold text-slate-900 text-sm">Spiral Bind</p>
-                  <p className="text-xs text-slate-600 mt-2">+₹25</p>
-                </button>
-              </div>
-            </div>
           </div>
 
-          {/* Price Summary */}
-          <div className="mb-8 pb-8 border-b border-slate-200 bg-slate-50 rounded-xl p-6">
-            <h3 className="text-sm font-semibold text-slate-500 uppercase mb-4">
-              Price Breakdown
-            </h3>
-            <div className="space-y-2 mb-4 text-sm">
-              <div className="flex justify-between text-slate-600">
-                <span>
-                  {settings.color === 'bw' ? 'B/W' : 'Color'} Printing (
-                  {settings.copies} copies)
-                </span>
-                <span className="font-semibold">₹{totalPrice}</span>
-              </div>
-              {settings.binding !== 'none' && (
-                <div className="flex justify-between text-slate-600">
-                  <span>
-                    {settings.binding.charAt(0).toUpperCase() +
-                      settings.binding.slice(1)}{' '}
-                    Binding
-                  </span>
-                  <span className="font-semibold">₹{bindingPrice}</span>
+          {/* --- RIGHT COLUMN: BILL (Sticky) --- */}
+          <div className="lg:col-span-1 lg:sticky lg:top-24">
+             <div className="bg-white rounded-2xl shadow-lg border border-slate-100 overflow-hidden">
+                <div className="p-6 bg-slate-50 border-b border-slate-100">
+                   <h2 className="font-bold text-slate-900 text-lg">Order Summary</h2>
+                   <p className="text-sm text-slate-500 flex items-center gap-1 mt-1">
+                      <Printer className="w-3 h-3" /> {shopData?.name}
+                   </p>
                 </div>
-              )}
-            </div>
-            <div className="flex justify-between text-lg font-bold text-slate-900 pt-4 border-t border-slate-200">
-              <span>Total Estimated Cost</span>
-              <span className="text-blue-600">₹{estimatedTotal}</span>
-            </div>
+                
+                <div className="p-6 space-y-4">
+                   <SummaryRow label="Pages" value={countingPages ? 'Calculating...' : pageCount.toString()} />
+                   <SummaryRow label="Copies" value={settings.copies.toString()} />
+                   <SummaryRow label="Print Mode" value={settings.color === 'bw' ? 'Black & White' : 'Color'} />
+                   
+                   <div className="flex justify-between items-center text-sm">
+                      <span className="text-slate-500">Sides</span>
+                      <span className={`font-medium ${isDoubleSided ? 'text-green-600' : 'text-slate-900'}`}>
+                        {isDoubleSided ? 'Double Sided (-20%)' : 'Single Sided'}
+                      </span>
+                   </div>
+                   
+                   <div className="flex justify-between items-center text-sm py-2 px-3 bg-blue-50 text-blue-700 rounded-lg font-medium">
+                      <span className="flex items-center gap-2"><Sheet className="w-4 h-4"/> Paper Required</span>
+                      <span>{countingPages ? '...' : sheetsUsed} Sheets</span>
+                   </div>
+
+                   <div className="my-4 border-t border-dashed border-slate-200"></div>
+                   
+                   <div className="space-y-2 text-sm text-slate-600">
+                      <div className="flex justify-between">
+                         <span>Printing ({totalFaces} faces)</span>
+                         <span>₹{rawPrintCost}</span>
+                      </div>
+                      
+                      {isDoubleSided && (
+                        <div className="flex justify-between text-green-600">
+                           <span className="flex items-center gap-1"><TrendingDown className="w-3 h-3"/> Double-Side Discount</span>
+                           <span>-₹{Math.floor(savingsAmount)}</span>
+                        </div>
+                      )}
+
+                      {bindingPrice > 0 && (
+                         <div className="flex justify-between">
+                            <span>Binding ({settings.binding})</span>
+                            <span>₹{bindingPrice}</span>
+                         </div>
+                      )}
+                   </div>
+
+                   <div className="pt-4 mt-2 border-t border-slate-200 flex justify-between items-center">
+                      <span className="font-bold text-slate-900 text-lg">Total Bill</span>
+                      <span className="font-bold text-blue-600 text-2xl">
+                        {countingPages ? '...' : `₹${totalCost}`}
+                      </span>
+                   </div>
+                </div>
+
+                <div className="p-4 bg-slate-50 border-t border-slate-100">
+                   <button 
+                      onClick={handleContinue} 
+                      disabled={processing || countingPages}
+                      className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-xl transition shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                   >
+                      {processing ? <Loader2 className="w-5 h-5 animate-spin"/> : <CreditCard className="w-5 h-5"/>}
+                      {processing ? 'Processing...' : 'Proceed to Pay'}
+                   </button>
+                </div>
+             </div>
           </div>
 
-          {/* Continue Button */}
-          <button
-            onClick={handleContinue}
-            disabled={processing}
-            className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 disabled:cursor-not-allowed text-white font-bold rounded-lg transition shadow-lg shadow-blue-600/20"
-          >
-            {processing ? 'Processing...' : 'Continue to Payment'}
-          </button>
         </div>
       </main>
     </div>
   )
+}
+
+// --- Subcomponents ---
+
+interface SectionProps {
+  title: string
+  icon: React.ReactNode
+  children: React.ReactNode
+}
+
+function Section({ title, icon, children }: SectionProps) {
+   return (
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+         <div className="flex items-center gap-2 mb-6">
+            <div className="p-2 bg-blue-50 rounded-lg">{icon}</div>
+            <h2 className="text-lg font-bold text-slate-900">{title}</h2>
+         </div>
+         {children}
+      </div>
+   )
+}
+
+interface OptionButtonProps {
+  selected: boolean
+  onClick: () => void
+  title: string
+  subtitle: string
+  icon: React.ReactNode
+}
+
+function OptionButton({ selected, onClick, title, subtitle, icon }: OptionButtonProps) {
+   return (
+      <button 
+         onClick={onClick}
+         className={`p-4 rounded-xl border-2 text-left transition-all relative flex items-center gap-4 w-full ${
+            selected 
+            ? 'border-blue-600 bg-blue-50/50 ring-1 ring-blue-600' 
+            : 'border-slate-200 hover:border-blue-300 hover:bg-slate-50'
+         }`}
+      >
+         <div className="shrink-0">{icon}</div>
+         <div>
+            <p className={`font-bold ${selected ? 'text-blue-700' : 'text-slate-900'}`}>{title}</p>
+            <p className="text-sm text-slate-500">{subtitle}</p>
+         </div>
+         {selected && (
+            <div className="absolute top-3 right-3 text-blue-600">
+               <Check className="w-5 h-5" />
+            </div>
+         )}
+      </button>
+   )
+}
+
+interface BindingOptionProps {
+  selected: boolean
+  onClick: () => void
+  label: string
+  price: string
+  icon: React.ReactNode
+}
+
+function BindingOption({ selected, onClick, label, price, icon }: BindingOptionProps) {
+   return (
+      <button 
+         onClick={onClick}
+         className={`p-4 rounded-xl border-2 text-center transition-all flex flex-col items-center justify-center gap-2 w-full ${
+            selected 
+            ? 'border-blue-600 bg-blue-50 ring-1 ring-blue-600 text-blue-700' 
+            : 'border-slate-200 hover:border-slate-300 text-slate-600'
+         }`}
+      >
+         <div className={`${selected ? 'text-blue-600' : 'text-slate-400'}`}>{icon}</div>
+         <div>
+             <p className="font-bold text-sm text-slate-900">{label}</p>
+             <p className="text-xs text-slate-500 mt-1 font-medium">{price}</p>
+         </div>
+      </button>
+   )
+}
+
+function SummaryRow({ label, value }: { label: string, value: string }) {
+   return (
+      <div className="flex justify-between items-center text-sm">
+         <span className="text-slate-500">{label}</span>
+         <span className="font-medium text-slate-900">{value}</span>
+      </div>
+   )
 }

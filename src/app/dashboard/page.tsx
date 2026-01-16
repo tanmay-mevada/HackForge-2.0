@@ -3,497 +3,356 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import { useRouter } from 'next/navigation'
+import { Toaster, toast } from 'sonner'
 import { 
   UploadCloud, 
   User, 
   Mail, 
-  ShieldCheck, 
   CalendarDays, 
   Printer, 
   CreditCard,
   FileText,
-  Settings,
-  AlertCircle,
-  CheckCircle2,
-  Store,
-  X,
   MapPin,
-  Upload
+  Store,
+  Loader2,
+  CheckCircle2,
+  History,
+  LogOut
 } from 'lucide-react'
 
-export default function Dashboard() {
+// --- Types ---
+interface Shop {
+  id: string
+  name: string
+  location: string
+  bw_price: number
+  color_price: number
+}
+
+interface Order {
+  id: string
+  file_name: string
+  file_size: number
+  status: string
+  created_at: string
+}
+
+interface UserProfile {
+  full_name: string
+  role: string
+}
+
+export default function StudentDashboard() {
   const router = useRouter()
   const supabase = createClient()
 
+  // --- State ---
   const [user, setUser] = useState<{ id: string; email?: string; created_at?: string } | null>(null)
-  const [userProfile, setUserProfile] = useState<{ full_name: string; role: string } | null>(null)
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
+  
   const [loading, setLoading] = useState(true)
-  const [orders, setOrders] = useState<{ id: string; file_name: string; file_size: number; status: string; created_at: string }[]>([])
-  const [loadingOrders, setLoadingOrders] = useState(false)
-
-  // Upload states
+  const [shops, setShops] = useState<Shop[]>([])
+  const [orders, setOrders] = useState<Order[]>([])
+  
+  // Interaction State
+  const [selectedShop, setSelectedShop] = useState<Shop | null>(null)
   const [file, setFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
-  const [uploadError, setUploadError] = useState<string | null>(null)
-  const [uploadSuccess, setUploadSuccess] = useState(false)
 
-  // Shop selection states
-  const [shops, setShops] = useState<{ id: string; name: string; location: string; bw_price: number; color_price: number }[]>([])
-  const [loadingShops, setLoadingShops] = useState(false)
-  const [selectedShop, setSelectedShop] = useState<{ id: string; name: string; location: string; bw_price: number; color_price: number } | null>(null)
-
-  // Initialize
+  // --- Init ---
   useEffect(() => {
     const init = async () => {
       try {
+        // 1. Auth Check
         const { data: { user: authUser } } = await supabase.auth.getUser()
-        if (!authUser) {
-          router.push('/login')
-          return
-        }
-
+        if (!authUser) { router.push('/login'); return }
         setUser(authUser)
 
-        const { data: profile } = await supabase
-          .from('users')
-          .select('*')
-          .eq('id', authUser.id)
-          .single()
+        // 2. Load Data Parallelly
+        const [profileRes, shopsRes, ordersRes] = await Promise.all([
+           supabase.from('users').select('*').eq('id', authUser.id).single(),
+           supabase.from('shops').select('*').order('name'),
+           supabase.from('uploads').select('id, file_name, file_size, status, created_at').eq('user_id', authUser.id).order('created_at', { ascending: false }).limit(10)
+        ])
 
-        setUserProfile(profile)
+        setUserProfile(profileRes.data)
+        setShops(shopsRes.data || [])
+        setOrders(ordersRes.data || [])
 
-        // Fetch user's orders
-        setLoadingOrders(true)
-        const { data: userOrders } = await supabase
-          .from('uploads')
-          .select('id, file_name, file_size, status, created_at')
-          .eq('user_id', authUser.id)
-          .order('created_at', { ascending: false })
-
-        setOrders(userOrders || [])
-        setLoadingOrders(false)
-        loadShops()
       } catch (err) {
-        console.error('Error loading dashboard:', err)
+        console.error(err)
+        toast.error('Failed to load dashboard data')
       } finally {
         setLoading(false)
       }
     }
-
     init()
   }, [router, supabase])
 
+  // --- Handlers ---
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0]
-    if (selectedFile) {
-      if (selectedFile.size > 10 * 1024 * 1024) {
-        setUploadError('File too large. Max 10MB allowed.')
-        return
-      }
+    if (!selectedFile) return
 
-      const allowedTypes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-excel']
-      if (!allowedTypes.includes(selectedFile.type)) {
-        setUploadError('Invalid file type. Only PDF, Word, and Excel documents allowed.')
-        return
-      }
-
-      setUploadError(null)
-      setFile(selectedFile)
+    // Validation
+    if (selectedFile.size > 10 * 1024 * 1024) {
+      toast.error('File too large (Max 10MB)')
+      return
     }
-  }
-
-  const handleUpload = async () => {
-    if (!file) {
-      setUploadError('Please select a file first')
+    const allowedTypes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-excel']
+    if (!allowedTypes.includes(selectedFile.type)) {
+      toast.error('Invalid file type. Use PDF, Word, or Excel.')
       return
     }
 
-    if (!selectedShop) {
-      setUploadError('Please select a shop first')
+    setFile(selectedFile)
+    toast.success('File attached successfully')
+  }
+
+  const handleUpload = async () => {
+    if (!file || !selectedShop) {
+      toast.warning('Please select a shop and a file first')
       return
     }
 
     setUploading(true)
-    setUploadError(null)
-    setUploadSuccess(false)
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('shopId', selectedShop.id)
 
     try {
-      const formData = new FormData()
-      formData.append('file', file)
-      formData.append('shopId', selectedShop.id)
-
       const response = await fetch('/api/upload', {
         method: 'POST',
         body: formData,
       })
-
       const data = await response.json()
 
-      if (!response.ok) {
-        setUploadError(data.error || 'Upload failed')
-        setUploading(false)
-        return
-      }
+      if (!response.ok) throw new Error(data.error || 'Upload failed')
 
-      // After successful upload, redirect user to Print Settings step
-      // passing uploadId and shopId as query params.
-      setFile(null)
+      toast.success('File uploaded! Redirecting...')
       router.push(`/print-settings?uploadId=${data.uploadId}&shopId=${selectedShop.id}`)
-
-    } catch (err) {
-      setUploadError('Failed to upload file. Please try again.')
-      console.error(err)
+    } catch (err: any) {
+      toast.error(err.message || 'Upload failed')
     } finally {
       setUploading(false)
     }
   }
 
-  const loadShops = async () => {
-    setLoadingShops(true)
-    try {
-      const { data: allShops } = await supabase
-        .from('shops')
-        .select('*')
-        .order('name')
-
-      setShops(allShops || [])
-    } catch (err) {
-      setUploadError('Failed to load shops. Please try again.')
-      console.error(err)
-    } finally {
-      setLoadingShops(false)
-    }
-  }
-
-  const handleSelectShop = (shop: { id: string; name: string; location: string; bw_price: number; color_price: number }) => {
-    setSelectedShop(shop)
-    setUploadSuccess(false)
-    setUploadError(null)
+  const handleLogout = async () => {
+    await supabase.auth.signOut()
+    router.push('/login')
   }
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-50/50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-slate-600">Loading dashboard...</p>
-        </div>
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <Loader2 className="w-10 h-10 text-blue-600 animate-spin" />
       </div>
     )
   }
 
-  // Helper for greeting based on server time
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
 
-
   return (
-    <div className="min-h-screen bg-slate-50/50">
-      
-      {/* Top Decoration Background */}
-      <div className="absolute top-0 left-0 w-full h-64 bg-slate-900 -z-10" />
+    <div className="min-h-screen bg-slate-50 pb-20">
+      <Toaster position="top-center" richColors />
 
-      <main className="max-w-6xl mx-auto px-6 pt-28 pb-12">
-        
-        {/* Header Section */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-10 text-white">
+      {/* --- HEADER --- */}
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+        <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
           <div>
-            <p className="text-blue-200 font-medium mb-1">{greeting},</p>
-            <h1 className="text-4xl font-bold">{userProfile?.full_name || 'Student'}</h1>
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">{greeting},</span>
+            <h1 className="text-lg font-bold text-slate-900">{userProfile?.full_name || 'Student'}</h1>
           </div>
-          <div className="mt-4 md:mt-0 flex items-center gap-3 bg-white/10 backdrop-blur-md px-4 py-2 rounded-full border border-white/10">
-            <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-            <span className="text-sm font-medium text-white">System Operational</span>
+          <button onClick={handleLogout} className="p-2 hover:bg-slate-100 rounded-full text-slate-500 hover:text-red-600 transition" title="Logout">
+            <LogOut className="w-5 h-5" />
+          </button>
+        </div>
+      </header>
+
+      <main className="max-w-6xl mx-auto px-6 pt-8">
+
+        {/* --- SECTION 1: ACTION AREA (Important Stuff) --- */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-10">
+          
+          {/* Shop Selector */}
+          <div className="lg:col-span-2">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="bg-blue-100 p-2 rounded-lg"><Store className="w-5 h-5 text-blue-600" /></div>
+              <h2 className="text-xl font-bold text-slate-900">1. Select a Shop</h2>
+            </div>
+            
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {shops.map((shop) => (
+                <button
+                  key={shop.id}
+                  onClick={() => setSelectedShop(shop)}
+                  className={`p-4 rounded-xl border-2 text-left transition-all relative group ${
+                    selectedShop?.id === shop.id
+                      ? 'border-blue-600 bg-blue-50/50 ring-1 ring-blue-600 shadow-sm'
+                      : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-md'
+                  }`}
+                >
+                  <div className="flex justify-between items-start mb-2">
+                    <h3 className="font-bold text-slate-900 line-clamp-1">{shop.name}</h3>
+                    {selectedShop?.id === shop.id && <CheckCircle2 className="w-5 h-5 text-blue-600" />}
+                  </div>
+                  <div className="flex items-center gap-1 text-sm text-slate-500 mb-3">
+                    <MapPin className="w-3.5 h-3.5" /> <span className="truncate">{shop.location}</span>
+                  </div>
+                  <div className="flex gap-2 text-xs font-medium">
+                     <span className="bg-slate-100 px-2 py-1 rounded text-slate-600">B/W: ₹{shop.bw_price}</span>
+                     <span className="bg-slate-100 px-2 py-1 rounded text-slate-600">Color: ₹{shop.color_price}</span>
+                  </div>
+                </button>
+              ))}
+              {shops.length === 0 && <p className="text-slate-500">No shops available.</p>}
+            </div>
+          </div>
+
+          {/* File Upload */}
+          <div className="lg:col-span-1">
+             <div className="flex items-center gap-2 mb-4">
+                <div className="bg-indigo-100 p-2 rounded-lg"><UploadCloud className="w-5 h-5 text-indigo-600" /></div>
+                <h2 className="text-xl font-bold text-slate-900">2. Upload File</h2>
+             </div>
+
+             <div className={`bg-white rounded-2xl border-2 border-dashed p-6 text-center transition-all h-[calc(100%-3rem)] flex flex-col justify-center ${
+               !selectedShop ? 'border-slate-200 opacity-60 cursor-not-allowed' : 'border-blue-300 hover:border-blue-500 hover:bg-blue-50/30'
+             }`}>
+                {!file ? (
+                  <label className={`cursor-pointer ${!selectedShop && 'pointer-events-none'}`}>
+                    <div className="w-14 h-14 bg-indigo-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                       <FileText className="w-7 h-7 text-indigo-600" />
+                    </div>
+                    <span className="bg-slate-900 text-white px-5 py-2.5 rounded-full text-sm font-bold shadow-lg shadow-slate-900/10 hover:shadow-xl hover:-translate-y-0.5 transition-all inline-block">
+                      {selectedShop ? 'Browse Document' : 'Select Shop First'}
+                    </span>
+                    <input type="file" className="hidden" onChange={handleFileChange} disabled={!selectedShop} accept=".pdf,.doc,.docx,.xls,.xlsx"/>
+                    <p className="mt-4 text-xs text-slate-400">PDF, Word, Excel (Max 10MB)</p>
+                  </label>
+                ) : (
+                  <div className="animate-in zoom-in-95 duration-200">
+                    <div className="w-14 h-14 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                      <FileText className="w-7 h-7 text-green-600" />
+                    </div>
+                    <p className="font-bold text-slate-900 truncate px-2">{file.name}</p>
+                    <p className="text-xs text-slate-500 mb-6">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                    
+                    <div className="space-y-2">
+                       <button onClick={handleUpload} disabled={uploading} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl shadow-lg shadow-blue-600/20 transition-all flex items-center justify-center gap-2">
+                          {uploading && <Loader2 className="w-4 h-4 animate-spin"/>}
+                          {uploading ? 'Uploading...' : 'Continue to Print'}
+                       </button>
+                       <button onClick={() => setFile(null)} disabled={uploading} className="w-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-2.5 rounded-xl transition-all">
+                          Change File
+                       </button>
+                    </div>
+                  </div>
+                )}
+             </div>
           </div>
         </div>
 
-        {/* Upload Section */}
-        <div className="mb-8 bg-white rounded-3xl shadow-lg border border-slate-200 p-8">
-          {/* Shop Selection */}
-          <div className="mb-8">
-            <div className="flex items-center gap-2 mb-6">
-              <Store className="w-6 h-6 text-blue-600" />
-              <h2 className="text-2xl font-bold text-slate-900">1. Select a Shop</h2>
-            </div>
-            {loadingShops ? (
-              <div className="text-center py-8">
-                <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto"></div>
-                <p className="text-slate-600 mt-3">Loading shops...</p>
-              </div>
-            ) : shops.length === 0 ? (
-              <div className="text-center py-8 bg-slate-50 rounded-lg border border-slate-200">
-                <Store className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-                <p className="text-slate-600">No shops available at the moment.</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {shops.map((shop) => (
-                  <button
-                    key={shop.id}
-                    onClick={() => handleSelectShop(shop)}
-                    className={`p-4 rounded-xl border-2 transition-all text-left ${
-                      selectedShop?.id === shop.id
-                        ? 'border-blue-600 bg-blue-50'
-                        : 'border-slate-200 bg-white hover:border-slate-300'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between mb-2">
-                      <h3 className="font-bold text-slate-900">{shop.name}</h3>
-                      {selectedShop?.id === shop.id && (
-                        <div className="w-5 h-5 rounded-full bg-blue-600 flex items-center justify-center">
-                          <CheckCircle2 className="w-4 h-4 text-white" />
-                        </div>
-                      )}
+        {/* --- SECTION 2: INFORMATION AREA (Extra Stuff) --- */}
+        <div className="border-t border-slate-200 pt-8 pb-12">
+           <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-6">Account & History</h3>
+           
+           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              
+              {/* Profile Summary Card */}
+              <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm h-fit">
+                 <div className="flex items-center gap-4 mb-6">
+                    <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full flex items-center justify-center text-white text-2xl font-bold shadow-lg">
+                       {userProfile?.full_name.charAt(0)}
                     </div>
-                    <div className="flex items-center gap-1 text-sm text-slate-600 mb-3">
-                      <MapPin className="w-4 h-4" />
-                      {shop.location}
-                    </div>
-                    <div className="space-y-1 text-xs text-slate-500">
-                      <p>B/W: ₹{shop.bw_price}/page</p>
-                      <p>Color: ₹{shop.color_price}/page</p>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Upload Area */}
-          <div>
-            <div className="flex items-center gap-2 mb-6">
-              <UploadCloud className="w-6 h-6 text-blue-600" />
-              <h2 className="text-2xl font-bold text-slate-900">2. Upload Document</h2>
-            </div>
-            
-            <div className={`transition-opacity duration-500 ${!selectedShop ? 'opacity-50 cursor-not-allowed' : ''}`}>
-              <div className="mb-6">
-                <label className="block">
-                  <div className={`border-2 border-dashed rounded-xl p-8 text-center ${!selectedShop ? 'border-slate-300' : 'border-blue-300 cursor-pointer hover:border-blue-500 hover:bg-blue-50 transition-all duration-300'}`}>
-                    <Upload className={`w-12 h-12 mx-auto mb-3 ${!selectedShop ? 'text-slate-400' : 'text-blue-500'}`} />
-                    <p className={`text-lg font-semibold mb-1 ${!selectedShop ? 'text-slate-500' : 'text-slate-900'}`}>
-                      Drop your file here or click to browse
-                    </p>
-                    <p className="text-sm text-slate-600">
-                      PDF, Word (.doc, .docx), or Excel (.xls, .xlsx) - Max 10 MB
-                    </p>
-                  </div>
-                  <input
-                    type="file"
-                    onChange={handleFileChange}
-                    accept=".pdf,.doc,.docx,.xls,.xlsx"
-                    className="hidden"
-                    disabled={!selectedShop}
-                  />
-                </label>
-              </div>
-
-              {/* Selected File */}
-              {file && (
-                <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <FileText className="w-6 h-6 text-blue-600" />
                     <div>
-                      <p className="font-semibold text-slate-900">{file.name}</p>
-                      <p className="text-sm text-slate-600">
-                        {(file.size / 1024 / 1024).toFixed(2)} MB
-                      </p>
+                       <h4 className="font-bold text-slate-900 text-lg">{userProfile?.full_name}</h4>
+                       <span className="text-xs bg-slate-100 text-slate-500 px-2 py-1 rounded-full uppercase font-bold tracking-wide">Student</span>
                     </div>
-                  </div>
-                  <button
-                    onClick={() => setFile(null)}
-                    className="text-sm px-3 py-1 bg-white text-slate-700 rounded hover:bg-slate-100 transition"
-                  >
-                    Change
-                  </button>
-                </div>
-              )}
+                 </div>
+                 
+                 <div className="space-y-3">
+                    <InfoRow icon={<Mail className="w-4 h-4"/>} label="Email" value={user?.email || ''} />
+                    <InfoRow icon={<CreditCard className="w-4 h-4"/>} label="ID" value={user?.id.substring(0, 8) + '...'} />
+                    <InfoRow icon={<CalendarDays className="w-4 h-4"/>} label="Joined" value={new Date(user?.created_at || '').toLocaleDateString()} />
+                 </div>
+              </div>
 
-              {/* Error Message */}
-              {uploadError && (
-                <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
-                  <AlertCircle className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
-                  <p className="text-red-700 text-sm">{uploadError}</p>
-                </div>
-              )}
-
-              {/* Success Message */}
-              {uploadSuccess && (
-                <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg flex items-start gap-3">
-                  <CheckCircle2 className="w-5 h-5 text-green-600 mt-0.5 flex-shrink-0" />
-                  <p className="text-green-700 text-sm">Upload successful! Continue to print settings to configure your order.</p>
-                </div>
-              )}
-
-              {/* Upload Button */}
-              <button
-                onClick={handleUpload}
-                disabled={!file || !selectedShop || uploading}
-                className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 disabled:cursor-not-allowed text-white font-bold rounded-lg transition shadow-lg shadow-blue-600/20"
-              >
-                {uploading ? 'Uploading...' : 'Next: Print Settings'}
-              </button>
-            </div>
-          </div>
+              {/* Order History Table */}
+              <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                 <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+                    <h4 className="font-bold text-slate-900 flex items-center gap-2">
+                       <History className="w-4 h-4 text-slate-400" /> Recent Prints
+                    </h4>
+                 </div>
+                 
+                 {orders.length === 0 ? (
+                    <div className="p-10 text-center text-slate-500">No print history yet.</div>
+                 ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm text-left">
+                        <thead className="bg-slate-50 text-slate-500">
+                          <tr>
+                            <th className="px-6 py-3 font-medium">File Name</th>
+                            <th className="px-6 py-3 font-medium">Date</th>
+                            <th className="px-6 py-3 font-medium">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                           {orders.map(order => (
+                             <tr key={order.id} className="hover:bg-slate-50/50">
+                                <td className="px-6 py-3 font-medium text-slate-900 flex items-center gap-2">
+                                   <FileText className="w-4 h-4 text-blue-500 shrink-0" />
+                                   <span className="truncate max-w-[150px]">{order.file_name}</span>
+                                </td>
+                                <td className="px-6 py-3 text-slate-500">
+                                   {new Date(order.created_at).toLocaleDateString()}
+                                </td>
+                                <td className="px-6 py-3">
+                                   <StatusBadge status={order.status} />
+                                </td>
+                             </tr>
+                           ))}
+                        </tbody>
+                      </table>
+                    </div>
+                 )}
+              </div>
+           </div>
         </div>
-
-        {/* --- BENTO GRID LAYOUT --- */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          
-          {/* Stats Column */}
-          <div className="md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-6">
-            
-            {/* Stat: Total Prints */}
-            <div className="rounded-3xl bg-white p-6 shadow-sm border border-slate-100 flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-slate-500">Total Prints</p>
-                <p className="text-3xl font-bold text-slate-900">{orders.length}</p>
-              </div>
-              <div className="h-12 w-12 rounded-2xl bg-amber-50 flex items-center justify-center">
-                <Printer className="h-6 w-6 text-amber-500" />
-              </div>
-            </div>
-
-            {/* Stat: Wallet / Status */}
-            <div className="rounded-3xl bg-white p-6 shadow-sm border border-slate-100 flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-slate-500">Account Status</p>
-                <p className="text-xl font-bold text-green-600">Active</p>
-              </div>
-              <div className="h-12 w-12 rounded-2xl bg-green-50 flex items-center justify-center">
-                <ShieldCheck className="h-6 w-6 text-green-600" />
-              </div>
-            </div>
-
-          </div>
-        </div>
-
-        {/* --- LOWER SECTION --- */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          
-          {/* Left: Recent Orders (Takes up 2/3) */}
-          <div className="lg:col-span-2 bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden flex flex-col min-h-[400px]">
-            <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-              <h3 className="font-bold text-lg text-slate-900 flex items-center gap-2">
-                <FileText className="w-5 h-5 text-slate-400" /> Recent Orders
-              </h3>
-              <button className="text-sm text-blue-600 font-medium hover:text-blue-700">View All</button>
-            </div>
-            
-            {/* Orders List or Empty State */}
-            {loadingOrders ? (
-              <div className="flex-1 flex items-center justify-center p-8">
-                <div className="text-center">
-                  <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-3"></div>
-                  <p className="text-slate-600 text-sm">Loading orders...</p>
-                </div>
-              </div>
-            ) : orders.length === 0 ? (
-              <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-slate-50/50">
-                <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center shadow-sm mb-4">
-                  <Printer className="w-8 h-8 text-slate-300" />
-                </div>
-                <h4 className="text-slate-900 font-semibold mb-1">No orders placed yet</h4>
-                <p className="text-slate-500 text-sm max-w-xs mx-auto mb-6">
-                  Your print history will appear here once you upload your first document.
-                </p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-slate-50 border-b border-slate-200">
-                    <tr>
-                      <th className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase">File Name</th>
-                      <th className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase">Size</th>
-                      <th className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase">Status</th>
-                      <th className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase">Date</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {orders.map((order) => (
-                      <tr key={order.id} className="border-b border-slate-100 hover:bg-slate-50 transition">
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-2">
-                            <FileText className="w-4 h-4 text-slate-400" />
-                            <span className="font-medium text-slate-900 truncate">{order.file_name}</span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 text-sm text-slate-600">
-                          {(order.file_size / 1024 / 1024).toFixed(2)} MB
-                        </td>
-                        <td className="px-6 py-4">
-                          <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${
-                            order.status === 'completed' ? 'bg-green-100 text-green-800' :
-                            order.status === 'printing' ? 'bg-blue-100 text-blue-800' :
-                            order.status === 'ready' ? 'bg-purple-100 text-purple-800' :
-                            'bg-yellow-100 text-yellow-800'
-                          }`}>
-                            {order.status.charAt(0).toUpperCase() + order.status.slice(1)}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-sm text-slate-600">
-                          {new Date(order.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          {/* Right: Profile Card (Takes up 1/3) */}
-          <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 h-fit">
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="font-bold text-lg text-slate-900">Profile</h3>
-              <button className="p-2 hover:bg-slate-100 rounded-full transition">
-                <Settings className="w-4 h-4 text-slate-400" />
-              </button>
-            </div>
-
-            <div className="flex flex-col items-center mb-6">
-              <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 text-2xl font-bold mb-3">
-                {userProfile?.full_name?.charAt(0) || <User />}
-              </div>
-              <h4 className="text-lg font-bold text-slate-900">{userProfile?.full_name}</h4>
-              <p className="text-sm text-slate-500 capitalize">{userProfile?.role || 'Student'}</p>
-            </div>
-
-            <div className="space-y-4">
-              <div className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 border border-slate-100">
-                <Mail className="w-5 h-5 text-slate-400" />
-                <div className="overflow-hidden">
-                  <p className="text-xs text-slate-500 font-medium uppercase">Email</p>
-                  <p className="text-sm font-semibold text-slate-900 truncate">{user?.email}</p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 border border-slate-100">
-                <CreditCard className="w-5 h-5 text-slate-400" />
-                <div>
-                  <p className="text-xs text-slate-500 font-medium uppercase">User ID</p>
-                  <p className="text-sm font-semibold text-slate-900 font-mono">
-                    {user?.id?.substring(0, 8)}...
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 border border-slate-100">
-                <CalendarDays className="w-5 h-5 text-slate-400" />
-                <div>
-                  <p className="text-xs text-slate-500 font-medium uppercase">Joined</p>
-                  <p className="text-sm font-semibold text-slate-900">
-                    {user?.created_at ? new Date(user.created_at).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : 'N/A'}
-                  </p>
-                </div>
-              </div>
-            </div>
-            
-          </div>
-
-        </div>
-
       </main>
     </div>
   )
+}
+
+// --- Subcomponents ---
+
+function InfoRow({ icon, label, value }: { icon: any, label: string, value: string }) {
+   return (
+      <div className="flex items-center justify-between py-2 border-b border-slate-50 last:border-0">
+         <div className="flex items-center gap-2 text-slate-500 text-sm">
+            {icon} <span>{label}</span>
+         </div>
+         <span className="text-sm font-medium text-slate-900">{value}</span>
+      </div>
+   )
+}
+
+function StatusBadge({ status }: { status: string }) {
+   const styles = {
+      completed: 'bg-green-100 text-green-700',
+      pending: 'bg-yellow-100 text-yellow-700',
+      printing: 'bg-blue-100 text-blue-700',
+      default: 'bg-slate-100 text-slate-600'
+   }
+   const style = styles[status as keyof typeof styles] || styles.default
+   
+   return (
+      <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold capitalize ${style}`}>
+         {status.replace('_', ' ')}
+      </span>
+   )
 }
