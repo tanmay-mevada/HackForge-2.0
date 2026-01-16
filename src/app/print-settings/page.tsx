@@ -26,6 +26,18 @@ import { Toaster, toast } from 'sonner'
 import JSZip from 'jszip'
 
 // --- Interfaces ---
+
+// 1. Define a specific type for the PDF library to avoid 'any'
+interface PDFJSModule {
+  GlobalWorkerOptions: {
+    workerSrc: string;
+  };
+  version: string;
+  getDocument: (src: { data: ArrayBuffer }) => {
+    promise: Promise<{ numPages: number }>;
+  };
+}
+
 interface PrintSettings {
   color: 'bw' | 'color'
   sides: 'single' | 'double'
@@ -53,7 +65,7 @@ export default function PrintSettingsPage() {
   // --- State ---
   const [settings, setSettings] = useState<PrintSettings>({
     color: 'bw',
-    sides: 'single', // Default to single
+    sides: 'single', 
     copies: 1,
     binding: 'none',
   })
@@ -97,10 +109,10 @@ export default function PrintSettingsPage() {
       setCountingPages(true)
 
       try {
-        // A. Fetch file info (Using your ACTUAL column names)
+        // A. Fetch file info
         const { data: uploadData, error } = await supabase
           .from('uploads')
-          .select('id, storage_path, file_name, user_id') // Corrected column name
+          .select('id, storage_path, file_name, user_id') 
           .eq('id', uploadId)
           .single()
 
@@ -112,7 +124,7 @@ export default function PrintSettingsPage() {
         // B. Download file as Blob
         const { data: fileBlob, error: downloadError } = await supabase
           .storage
-          .from('documents') // Verify bucket name!
+          .from('documents') 
           .download(uploadData.storage_path)
 
         if (downloadError || !fileBlob) throw new Error('Download failed')
@@ -146,8 +158,17 @@ export default function PrintSettingsPage() {
   // --- Helpers: Page Counting ---
   const countPdfPages = async (buffer: ArrayBuffer): Promise<number> => {
     try {
-      const pdfjsLib = await import('pdfjs-dist')
-      pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
+      // Dynamic import
+      const pdfjsModule = await import('pdfjs-dist')
+      
+      // FIXED: Cast to specific interface instead of 'any'
+      const pdfjsLib = pdfjsModule as unknown as PDFJSModule
+
+      // Set worker source
+      if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+         pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
+      }
+
       const pdf = await pdfjsLib.getDocument({ data: buffer }).promise
       return pdf.numPages
     } catch (e) {
@@ -174,33 +195,25 @@ export default function PrintSettingsPage() {
 
   // --- 3. PRACTICAL BILL CALCULATION ---
   
-  // Base Rate (Per Side/Impression)
   const baseRate = settings.color === 'bw' ? (shopData?.bw_price || 0) : (shopData?.color_price || 0)
   
-  // Total Faces to Print
   const totalFaces = pageCount * settings.copies
 
-  // Raw Printing Cost (Without Discounts)
   const rawPrintCost = totalFaces * baseRate
 
-  // Double-Sided Discount Logic (20% Savings)
-  // If printing double-sided, we apply a 0.8 multiplier to the print cost
   const isDoubleSided = settings.sides === 'double'
   const discountMultiplier = isDoubleSided ? 0.8 : 1
   
   const finalPrintCost = Math.ceil(rawPrintCost * discountMultiplier)
   const savingsAmount = rawPrintCost - finalPrintCost
 
-  // Sheets Calculation
   const sheetsUsed = isDoubleSided ? Math.ceil(pageCount / 2) * settings.copies : pageCount * settings.copies
 
-  // Binding Cost
   const bindingPrice = 
     settings.binding === 'staple' ? 5 : 
     settings.binding === 'spiral' ? (shopData?.spiral_price || 25) : 
     settings.binding === 'lamination' ? (shopData?.lamination_price || 40) : 0
   
-  // Total Bill
   const totalCost = finalPrintCost + bindingPrice
 
   // --- Handler ---
@@ -212,59 +225,23 @@ export default function PrintSettingsPage() {
       const { error } = await supabase
         .from('uploads')
         .update({
-          // Saving simple metadata or jsonb if you prefer
           status: 'pending_payment', 
           shop_id: shopId,
-          // You might want to save these calculated values to your DB if columns exist:
-          // total_price: totalCost,
-          // total_pages: pageCount
         })
         .eq('id', uploadId)
 
       if (error) throw error
 
-      // Pass calculated values to Payment Page
       const params = new URLSearchParams({
         uploadId: uploadId,
         shopId: shopId,
         amount: totalCost.toString(),
-        // Metadata for display
         desc: `${settings.color.toUpperCase()} Print (${settings.copies} copies)`
       })
 
       router.push(`/payment?${params.toString()}`)
     } catch (err) {
       toast.error('Failed to proceed')
-      // Calculate total amount
-      const basePrice = settings.color === 'bw' ? shopData?.bw_price || 0 : shopData?.color_price || 0
-      const totalPrice = basePrice * settings.copies
-      const bindingPrice = settings.binding === 'staple' ? 5 : settings.binding === 'spiral' ? 25 : 0
-      const totalAmount = totalPrice + bindingPrice
-
-      // Create payment record
-      const paymentResponse = await fetch('/api/payments/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          uploadId,
-          amount: totalAmount,
-        }),
-      })
-
-      const paymentData = await paymentResponse.json()
-
-      if (!paymentResponse.ok || !paymentData.txnid) {
-        throw new Error('Failed to create payment record')
-      }
-
-      // Redirect to success/verification page with txnid
-      router.push(
-        `/success?uploadId=${uploadId}&shopId=${shopId}&txnid=${paymentData.txnid}&printColor=${settings.color}&printSides=${settings.sides}&printCopies=${settings.copies}&printBinding=${settings.binding}`
-      )
-    } catch (err) {
-      console.error('Error continuing to payment:', err)
-      alert('Failed to proceed. Please try again.')
-    } finally {
       setProcessing(false)
     }
   }
@@ -308,7 +285,7 @@ export default function PrintSettingsPage() {
                   <h3 className="font-bold text-slate-900 truncate max-w-[200px]">{fileName}</h3>
                   <div className="flex items-center gap-2 mt-1">
                     <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-bold">
-                        {countingPages ? '...' : pageCount} Pages
+                        {countingPages ? 'Scanning...' : `${pageCount} Pages`}
                     </span>
                   </div>
                </div>
@@ -442,7 +419,7 @@ export default function PrintSettingsPage() {
                       
                       {isDoubleSided && (
                         <div className="flex justify-between text-green-600">
-                           <span className="flex items-center gap-1"><TrendingDown className="w-3 h-3"/> Double-Side Discount</span>
+                           <span className="flex items-center gap-1"><TrendingDown className="w-3 h-3"/> Discount</span>
                            <span>-₹{Math.floor(savingsAmount)}</span>
                         </div>
                       )}
