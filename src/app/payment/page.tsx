@@ -3,7 +3,14 @@
 import { useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/utils/supabase/client'
-import { ArrowLeft, FileText, MapPin, Loader } from 'lucide-react'
+import { ArrowLeft, FileText, MapPin, Loader, Printer } from 'lucide-react'
+
+interface PrintSettings {
+  color: 'bw' | 'color'
+  sides: 'single' | 'double'
+  copies: number
+  binding: 'none' | 'staple' | 'spiral'
+}
 
 export default function PaymentPage() {
   const router = useRouter()
@@ -12,6 +19,10 @@ export default function PaymentPage() {
 
   const uploadId = searchParams.get('uploadId')
   const shopId = searchParams.get('shopId')
+  const printColor = (searchParams.get('printColor') || 'bw') as 'bw' | 'color'
+  const printSides = (searchParams.get('printSides') || 'single') as 'single' | 'double'
+  const printCopies = parseInt(searchParams.get('printCopies') || '1')
+  const printBinding = (searchParams.get('printBinding') || 'none') as 'none' | 'staple' | 'spiral'
 
   const [uploadData, setUploadData] = useState<{ file_name: string; file_size: number } | null>(null)
   const [shopData, setShopData] = useState<{ name: string; location: string; bw_price: number; color_price: number } | null>(null)
@@ -81,6 +92,13 @@ export default function PaymentPage() {
     }
   }
 
+  const basePrice = printColor === 'bw' ? (shopData?.bw_price || 0) : (shopData?.color_price || 0)
+  const printingCost = basePrice * printCopies
+  const bindingCost = 
+    printBinding === 'staple' ? 5 : 
+    printBinding === 'spiral' ? 25 : 0
+  const totalAmount = printingCost + bindingCost
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50/50 flex items-center justify-center">
@@ -140,19 +158,60 @@ export default function PaymentPage() {
             </div>
           </div>
 
+          {/* Print Settings */}
+          <div className="mb-8 pb-8 border-b border-slate-200">
+            <h2 className="text-lg font-semibold text-slate-900 mb-4 flex items-center gap-2">
+              <Printer className="w-5 h-5 text-blue-600" />
+              Print Settings
+            </h2>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                <p className="text-xs text-slate-500 uppercase font-semibold mb-1">Color</p>
+                <p className="text-sm font-semibold text-slate-900">
+                  {printColor === 'bw' ? 'Black & White' : 'Color'}
+                </p>
+              </div>
+              <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                <p className="text-xs text-slate-500 uppercase font-semibold mb-1">Print Sides</p>
+                <p className="text-sm font-semibold text-slate-900">
+                  {printSides === 'single' ? 'Single-sided' : 'Double-sided'}
+                </p>
+              </div>
+              <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                <p className="text-xs text-slate-500 uppercase font-semibold mb-1">Copies</p>
+                <p className="text-sm font-semibold text-slate-900">{printCopies}</p>
+              </div>
+              <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                <p className="text-xs text-slate-500 uppercase font-semibold mb-1">Binding</p>
+                <p className="text-sm font-semibold text-slate-900">
+                  {printBinding === 'none' ? 'No Binding' : printBinding === 'staple' ? 'Staple' : 'Spiral Bind'}
+                </p>
+              </div>
+            </div>
+          </div>
+
           {/* Pricing Section */}
-          <div className="mb-8 space-y-3">
-            <div className="flex justify-between text-slate-600">
-              <span>Estimated Pages</span>
-              <span>1-5 pages</span>
-            </div>
-            <div className="flex justify-between text-slate-600">
-              <span>B/W: 5 pages × ₹{shopData?.bw_price}</span>
-              <span>₹{(shopData?.bw_price ?? 0) * 5}</span>
-            </div>
-            <div className="pt-3 border-t border-slate-200 flex justify-between text-lg font-bold text-slate-900">
-              <span>Total Amount</span>
-              <span>₹{((shopData?.bw_price ?? 0) * 5).toFixed(2)}</span>
+          <div className="mb-8 bg-slate-50 rounded-xl p-6 border border-slate-200">
+            <h2 className="text-lg font-semibold text-slate-900 mb-4">Price Breakdown</h2>
+            <div className="space-y-3">
+              <div className="flex justify-between text-slate-600">
+                <span>
+                  {printColor === 'bw' ? 'B/W' : 'Color'} Printing ({printCopies} {printCopies === 1 ? 'copy' : 'copies'})
+                </span>
+                <span className="font-semibold">₹{printingCost}</span>
+              </div>
+              {printBinding !== 'none' && (
+                <div className="flex justify-between text-slate-600">
+                  <span>
+                    {printBinding === 'staple' ? 'Staple' : 'Spiral Bind'} Binding
+                  </span>
+                  <span className="font-semibold">₹{bindingCost}</span>
+                </div>
+              )}
+              <div className="pt-3 border-t border-slate-300 flex justify-between text-lg font-bold text-slate-900">
+                <span>Total Amount</span>
+                <span className="text-blue-600">₹{totalAmount}</span>
+              </div>
             </div>
           </div>
 

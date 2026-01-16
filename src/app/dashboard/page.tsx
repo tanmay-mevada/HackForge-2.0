@@ -172,6 +172,18 @@ export default function Dashboard() {
 
   const handleSelectShop = (shop: { id: string; name: string; location: string; bw_price: number; color_price: number }) => {
     setSelectedShop(shop)
+<<<<<<< HEAD
+=======
+  }
+
+  const handleProceedToPrintSettings = () => {
+    if (!selectedShop || !uploadId) return
+    router.push(`/print-settings?uploadId=${uploadId}&shopId=${selectedShop.id}`)
+  }
+
+  const resetUpload = () => {
+    setFile(null)
+>>>>>>> ff1d5b70949bf1ee80a6c4c47c3145e78024ee5b
     setUploadSuccess(false)
     setUploadError(null)
   }
@@ -262,6 +274,18 @@ export default function Dashboard() {
                 ))}
               </div>
             )}
+<<<<<<< HEAD
+=======
+
+            {selectedShop && (
+              <button
+                onClick={handleProceedToPrintSettings}
+                className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition shadow-lg shadow-blue-600/20"
+              >
+                Proceed to Payment
+              </button>
+            )}
+>>>>>>> ff1d5b70949bf1ee80a6c4c47c3145e78024ee5b
           </div>
 
           {/* Upload Area */}
