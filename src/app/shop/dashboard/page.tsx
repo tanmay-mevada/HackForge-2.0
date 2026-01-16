@@ -10,7 +10,6 @@ import {
   IndianRupee,
   FileText,
   Download,
-  Loader,
 } from 'lucide-react'
 import LogoutButton from '@/components/logout-button'
 
@@ -18,7 +17,6 @@ export default function ShopDashboard() {
   const router = useRouter()
   const supabase = createClient()
 
-  const [user, setUser] = useState<{ id: string; email?: string } | null>(null)
   const [shopData, setShopData] = useState<{ id: string; name: string; location: string; bw_price: number; color_price: number } | null>(null)
   const [orders, setOrders] = useState<{ id: string; file_name: string; file_size: number; status: string; created_at: string; user_id: string }[]>([])
   const [loading, setLoading] = useState(true)
@@ -32,8 +30,6 @@ export default function ShopDashboard() {
           router.push('/login')
           return
         }
-
-        setUser(authUser as { id: string; email?: string })
 
         // Fetch user profile to verify role
         const { data: profile } = await supabase
@@ -88,16 +84,31 @@ export default function ShopDashboard() {
         body: JSON.stringify({ uploadId }),
       })
 
-      if (!response.ok) throw new Error('Failed to generate download link')
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to download file')
+      }
 
-      const data = await response.json()
-      const link = document.createElement('a')
-      link.href = data.url
-      link.download = data.fileName || fileName
-      link.click()
+      // Check if response is JSON (signed URL) or blob (direct file)
+      const contentType = response.headers.get('content-type')
+      
+      if (contentType?.includes('application/json')) {
+        const data = await response.json()
+        // Open signed URL in new window for download
+        window.open(data.url, '_blank')
+      } else {
+        // Direct file download
+        const blob = await response.blob()
+        const url = window.URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = url
+        link.download = fileName
+        link.click()
+        window.URL.revokeObjectURL(url)
+      }
     } catch (error) {
       console.error('Download error:', error)
-      alert('Failed to download file')
+      alert(`Failed to download file: ${error instanceof Error ? error.message : 'Unknown error'}`)
     }
   }
 
@@ -114,7 +125,6 @@ export default function ShopDashboard() {
 
   const pendingCount = orders.filter(o => o.status === 'pending_payment').length
   const completedCount = orders.filter(o => o.status === 'completed').length
-  const totalPages = orders.reduce((sum, order) => sum + Math.ceil(order.file_size / 100000), 0)
   return (
     <div className="min-h-screen bg-slate-50">
       {/* PROFESSIONAL HEADER */}
@@ -272,7 +282,7 @@ function StatCard({
 }: {
   title: string
   value: string
-  icon: any
+  icon: React.ReactNode
   bg: string
 }) {
   return (
