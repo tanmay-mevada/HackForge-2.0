@@ -49,6 +49,64 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to update order status' }, { status: 500 })
     }
 
+    // Send email notifications
+    try {
+      const { user_id, shop_id, file_name } = data
+      
+      const { data: shopData, error: shopError } = await supabaseService
+        .from('shops')
+        .select('name, owner_id')
+        .eq('id', shop_id)
+        .single()
+      
+      if (shopError || !shopData) {
+        console.error('Shop not found:', shopError)
+      } else {
+        const { data: shopOwner, error: ownerError } =
+          await supabaseService.auth.admin.getUserById(shopData.owner_id)
+        const { data: user, error: userError } =
+          await supabaseService.auth.admin.getUserById(user_id)
+
+        if (ownerError || !shopOwner) {
+          console.error('Shop owner not found:', ownerError)
+        } else if (userError || !user) {
+          console.error('User not found:', userError)
+        } else {
+          const { transporter } = await import('@/utils/nodemailer')
+          const shopOwnerName =
+            shopOwner.user.user_metadata?.full_name || 'Shop Owner'
+          const userName = user.user.user_metadata?.full_name || 'Customer'
+          // Email to user
+          await transporter.sendMail({
+            from: process.env.EMAIL,
+            to: user.user.email,
+            subject: 'File Collected!',
+            html: `
+              <h1>Collection Confirmed</h1>
+              <p>Hi ${userName},</p>
+              <p>You have successfully collected your file "<b>${file_name}</b>" from <b>${shopData.name}</b>.</p>
+              <p>Thank you for using our service!</p>
+            `,
+          })
+
+          // Email to shopkeeper
+          await transporter.sendMail({
+            from: process.env.EMAIL,
+            to: shopOwner.user.email,
+            subject: 'Order Collected by Customer',
+            html: `
+              <h1>Order Collected</h1>
+              <p>Hi ${shopOwnerName},</p>
+              <p>The order for file "<b>${file_name}</b>" has been collected by <b>${userName}</b>.</p>
+              <p>The order status has been updated to 'done'.</p>
+            `,
+          })
+        }
+      }
+    } catch (emailError) {
+      console.error('Failed to send emails:', emailError)
+    }
+
     return NextResponse.json({ success: true, updatedOrder: data })
   } catch (error) {
     console.error('Error verifying OTP:', error)
