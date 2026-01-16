@@ -55,11 +55,31 @@ export default function PaymentPage() {
 
   const handlePayment = async () => {
     setProcessing(true)
-    // Payment implementation would go here
-    // For now, just simulate success
-    setTimeout(() => {
-      router.push(`/success?uploadId=${uploadId}`)
-    }, 2000)
+    try {
+      // Save shop_id to upload
+      const updateResponse = await fetch('/api/orders/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          uploadId,
+          shopId,
+          status: 'printing', // Change status to printing after payment
+        }),
+      })
+
+      if (!updateResponse.ok) {
+        throw new Error('Failed to process order')
+      }
+
+      // Payment implementation would go here
+      // For now, just simulate success
+      setTimeout(() => {
+        router.push(`/success?uploadId=${uploadId}&shopId=${shopId}`)
+      }, 2000)
+    } catch (err) {
+      console.error('Payment error:', err)
+      setProcessing(false)
+    }
   }
 
   if (loading) {
