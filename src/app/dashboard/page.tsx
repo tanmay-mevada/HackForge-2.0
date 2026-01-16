@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import { useRouter } from 'next/navigation'
 import { 
@@ -10,20 +10,19 @@ import {
   CheckCircle2, 
   FileText, 
   AlertCircle, 
-  X, 
   Loader2,
   Clock,
   CheckCircle
 } from 'lucide-react'
 
-// Define interfaces for better type safety
+// Interface matches your Database Schema
 interface Shop {
   id: string
   name: string
   location: string
   bw_price: number
   color_price: number
-  is_open: boolean
+  is_open: boolean // This boolean from DB controls the UI
 }
 
 interface Order {
@@ -47,22 +46,18 @@ export default function Dashboard() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
   const [loading, setLoading] = useState(true)
   
-  // Order states
   const [orders, setOrders] = useState<Order[]>([])
   const [loadingOrders, setLoadingOrders] = useState(false)
 
-  // Upload states
   const [file, setFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [uploadSuccess, setUploadSuccess] = useState(false)
 
-  // Shop selection states
   const [shops, setShops] = useState<Shop[]>([])
   const [loadingShops, setLoadingShops] = useState(false)
   const [selectedShop, setSelectedShop] = useState<Shop | null>(null)
 
-  // Initialize Data
   useEffect(() => {
     const init = async () => {
       try {
@@ -92,12 +87,14 @@ export default function Dashboard() {
         setOrders(userOrders || [])
         setLoadingOrders(false)
 
-        // 4. Fetch Shops
+        // 4. Fetch Shops (Includes is_open status from DB)
         setLoadingShops(true)
         const { data: allShops } = await supabase
           .from('shops')
           .select('*')
           .order('name')
+        
+        // Safety check to ensure we have an array
         setShops(allShops || [])
         setLoadingShops(false)
 
@@ -114,7 +111,6 @@ export default function Dashboard() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0]
     if (selectedFile) {
-      // 10MB Limit
       if (selectedFile.size > 10 * 1024 * 1024) {
         setUploadError('File too large. Max 10MB allowed.')
         return
@@ -149,6 +145,12 @@ export default function Dashboard() {
       return
     }
 
+    // Double check shop status before upload (in case it closed while user was on page)
+    if (!selectedShop.is_open) {
+      setUploadError('This shop is currently closed. Please select another.')
+      return
+    }
+
     setUploading(true)
     setUploadError(null)
     setUploadSuccess(false)
@@ -172,7 +174,6 @@ export default function Dashboard() {
       setFile(null)
       setUploadSuccess(true)
       
-      // Refresh orders immediately
       const { data: updatedOrders } = await supabase
         .from('uploads')
         .select('id, file_name, file_size, status, created_at')
@@ -190,13 +191,13 @@ export default function Dashboard() {
   }
 
   const handleSelectShop = (shop: Shop) => {
-    // Optional: Prevent selection if closed
-    // if (!shop.is_open) return 
+    // STRICT CHECK: Do not allow selection if shop is closed in DB
+    if (!shop.is_open) return 
+    
     setSelectedShop(shop)
     setUploadError(null)
   }
 
-  // Format file size
   const formatBytes = (bytes: number) => {
     if (bytes === 0) return '0 Bytes'
     const k = 1024
@@ -221,13 +222,10 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      
-      {/* Top Decoration Background */}
       <div className="absolute top-0 left-0 w-full h-72 bg-slate-900 -z-0" />
 
       <main className="max-w-6xl mx-auto px-6 pt-24 pb-12 relative z-10">
         
-        {/* Header Section */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-10 text-white">
           <div>
             <p className="text-blue-200 font-medium mb-1">{greeting},</p>
@@ -239,13 +237,11 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Main Content Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           
-          {/* Left Column: Actions */}
           <div className="lg:col-span-2 space-y-8">
             
-            {/* 1. Shop Selection */}
+            {/* 1. Shop Selection - Displays Open/Closed based on DB */}
             <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-8">
               <div className="flex items-center gap-2 mb-6">
                 <Store className="w-6 h-6 text-blue-600" />
@@ -260,12 +256,12 @@ export default function Dashboard() {
                     <button
                       key={shop.id}
                       onClick={() => handleSelectShop(shop)}
-                      disabled={!shop.is_open}
+                      disabled={!shop.is_open} // HTML disabled attribute
                       className={`p-4 rounded-xl border-2 transition-all text-left relative group ${
                         selectedShop?.id === shop.id
                           ? 'border-blue-600 bg-blue-50/50 ring-1 ring-blue-600'
                           : 'border-slate-100 bg-white hover:border-blue-200 hover:shadow-md'
-                      } ${!shop.is_open ? 'opacity-60 grayscale cursor-not-allowed' : ''}`}
+                      } ${!shop.is_open ? 'opacity-60 grayscale cursor-not-allowed bg-slate-50' : ''}`}
                     >
                       <div className="flex justify-between items-start mb-2">
                         <h3 className="font-bold text-slate-900">{shop.name}</h3>
@@ -278,9 +274,13 @@ export default function Dashboard() {
                         <span className="bg-slate-100 px-2 py-1 rounded">BW: ₹{shop.bw_price}</span>
                         <span className="bg-slate-100 px-2 py-1 rounded">Color: ₹{shop.color_price}</span>
                       </div>
+                      
+                      {/* Badge for Closed Shops */}
                       {!shop.is_open && (
-                        <div className="absolute inset-0 bg-white/50 flex items-center justify-center rounded-xl">
-                          <span className="bg-red-100 text-red-700 text-xs font-bold px-3 py-1 rounded-full">Closed</span>
+                        <div className="absolute inset-0 flex items-center justify-center rounded-xl bg-slate-100/10 backdrop-blur-[1px]">
+                          <span className="bg-red-100 text-red-700 text-xs font-bold px-3 py-1.5 rounded-full border border-red-200 shadow-sm">
+                            Currently Closed
+                          </span>
                         </div>
                       )}
                     </button>
@@ -333,7 +333,7 @@ export default function Dashboard() {
                       </button>
                       <button 
                         onClick={handleUpload}
-                        disabled={uploading || !selectedShop}
+                        disabled={uploading || !selectedShop || !selectedShop.is_open}
                         className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2 rounded-full font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-600/20"
                       >
                         {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
@@ -344,7 +344,6 @@ export default function Dashboard() {
                 )}
               </div>
 
-              {/* Status Messages */}
               {uploadError && (
                 <div className="mt-4 p-4 bg-red-50 text-red-700 rounded-xl flex items-center gap-3">
                   <AlertCircle className="w-5 h-5 shrink-0" />
@@ -364,7 +363,7 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Right Column: Recent Activity */}
+          {/* Right Column */}
           <div className="lg:col-span-1">
             <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 h-full">
               <h3 className="text-lg font-bold text-slate-900 mb-6 flex items-center gap-2">
