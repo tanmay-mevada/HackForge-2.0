@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/utils/supabase/client'
 import { ArrowLeft, FileText, MapPin, Loader, Printer } from 'lucide-react'
+import UpiQr from '@/components/UpiQr'
 
 interface PrintSettings {
   color: 'bw' | 'color'
@@ -222,19 +223,31 @@ export default function PaymentPage() {
             </p>
           </div>
 
-          {/* Payment Button */}
-          <button
-            onClick={handlePayment}
-            disabled={processing}
-            className="w-full py-4 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 disabled:cursor-not-allowed text-white font-bold rounded-lg transition shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2"
-          >
-            {processing && <Loader className="w-5 h-5 animate-spin" />}
-            {processing ? 'Processing Payment...' : 'Proceed to Payment'}
-          </button>
+          {/* UPI QR (PayU/Manual UPI) */}
+          <UpiQr amount={totalAmount} />
+
+          {/* PayU form: posts to server which returns auto-submitting form to PayU */}
+          <form action="/api/payu/pay" method="POST" className="mt-6">
+            <input type="hidden" name="amount" value={totalAmount} />
+            <input type="hidden" name="productinfo" value="Print Link Order" />
+            <input type="hidden" name="firstname" value="Print Link Customer" />
+            <input type="hidden" name="email" value="no-reply@printlink.local" />
+            <input type="hidden" name="uploadId" value={uploadId || ''} />
+            <input type="hidden" name="shopId" value={shopId || ''} />
+
+            <button
+              type="submit"
+              disabled={processing}
+              className="w-full py-4 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 disabled:cursor-not-allowed text-white font-bold rounded-lg transition shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2"
+            >
+              {processing && <Loader className="w-5 h-5 animate-spin" />}
+              {processing ? 'Processing Payment...' : 'Proceed to PayU'}
+            </button>
+          </form>
 
           {/* Security Info */}
           <div className="mt-6 text-center text-xs text-slate-500">
-            <p>Your payment is secure and encrypted. Processing via Razorpay.</p>
+            <p>Your payment is secure and encrypted. Processing via PayU (UPI QR supported).</p>
           </div>
         </div>
       </main>

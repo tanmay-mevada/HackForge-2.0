@@ -74,27 +74,13 @@ export default function PrintSettingsPage() {
     setProcessing(true)
 
     try {
-      // Store print settings in the database
-      const { error } = await supabase
-        .from('uploads')
-        .update({
-          print_color: settings.color,
-          print_sides: settings.sides,
-          print_copies: settings.copies,
-          print_binding: settings.binding,
-          shop_id: shopId,
-        })
-        .eq('id', uploadId)
-
-      if (error) throw error
-
       // Redirect to payment with all parameters
       router.push(
         `/payment?uploadId=${uploadId}&shopId=${shopId}&printColor=${settings.color}&printSides=${settings.sides}&printCopies=${settings.copies}&printBinding=${settings.binding}`
       )
     } catch (err) {
-      console.error('Error saving print settings:', err)
-      alert('Failed to save print settings. Please try again.')
+      console.error('Error continuing to payment:', err)
+      alert('Failed to continue to payment. Please try again.')
     } finally {
       setProcessing(false)
     }

@@ -1,41 +1,56 @@
 import { NextResponse } from "next/server";
-import Razorpay from "razorpay";
-//export
+import { createHash } from "crypto";
+
+// PayU lite endpoint: generate txnid + hash and return UPI deep link for manual UPI payments
 export async function POST(request: Request) {
-  
-  // 1. Check if keys are loaded from .env.local
-  if (!process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
-    console.error("❌ ERROR: Keys missing in .env.local file");
-    return NextResponse.json(
-      { error: "Server Error: Razorpay keys are missing." },
-      { status: 500 }
-    );
+  // Ensure PayU credentials are set
+  const key = process.env.PAYU_MERCHANT_KEY
+  const salt = process.env.PAYU_SALT
+
+  if (!key || !salt) {
+    console.error("❌ ERROR: PayU keys missing in .env.local (PAYU_MERCHANT_KEY / PAYU_SALT)");
+    return NextResponse.json({ error: "Server Error: PayU keys are missing." }, { status: 500 });
   }
 
-  // 2. Initialize Razorpay
-  const razorpay = new Razorpay({
-    key_id: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
-    key_secret: process.env.RAZORPAY_KEY_SECRET,
-  });
-
   try {
-    const { amount } = await request.json();
+    const body = await request.json();
+    const amount = body.amount || body.totalAmount
+    const firstname = body.firstname || "Customer"
+    const email = body.email || "no-reply@printlink.local"
 
-    // 3. Create the Order
-    const order = await razorpay.orders.create({
-      amount: amount * 100, // Convert to paise
-      currency: "INR",
-      receipt: "receipt_" + Math.random().toString(36).substring(7),
-    });
+    if (!amount) {
+      return NextResponse.json({ error: 'Missing amount' }, { status: 400 });
+    }
 
-    return NextResponse.json({ orderId: order.id }, { status: 200 });
+    // Create a transaction id
+    const txnid = 'txn_' + Math.random().toString(36).substring(2, 12)
+    const productinfo = 'Print Link Order'
 
-  } catch (error: any) {
-    console.error("❌ RAZORPAY ERROR:", error);
-    // Return the specific error from Razorpay (e.g., "Auth Failed")
+    // PayU hash string format: key|txnid|amount|productinfo|firstname|email|||||||||||salt
+    const hashString = `${key}|${txnid}|${amount}|${productinfo}|${firstname}|${email}|||||||||||${salt}`
+    const hash = createHash('sha512').update(hashString).digest('hex')
+
+    // UPI deep link using supplied UPI id (we default to the requested ID for QR)
+    const upiId = process.env.PAYU_UPI_ID || 'tanmaymevada24@oksbi'
+    const upiName = process.env.PAYU_UPI_NAME || 'Print Link Admin'
+    const amountStr = Number(amount).toFixed(2)
+    const upiUrl = `upi://pay?pa=${upiId}&pn=${encodeURIComponent(upiName)}&am=${amountStr}&cu=INR`
+
     return NextResponse.json(
-      { error: error.error?.description || "Failed to create order with Razorpay" },
-      { status: 500 }
-    );
+      {
+        merchantKey: key,
+        txnid,
+        amount,
+        productinfo,
+        firstname,
+        email,
+        hash,
+        upiUrl,
+      },
+      { status: 200 }
+    )
+  } catch (err: any) {
+    console.error('❌ PAYU ERROR:', err)
+    return NextResponse.json({ error: 'Failed to generate PayU transaction' }, { status: 500 })
   }
 }
