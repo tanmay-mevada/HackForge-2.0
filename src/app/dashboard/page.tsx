@@ -100,6 +100,7 @@ export default async function Dashboard() {
                 <p className="text-sm text-slate-600 font-semibold mb-1">Email Address</p>
               </div>
               <p className="text-lg font-bold text-slate-900 break-all">{user.email}</p>
+              {/* hey */}
             </div>
 
             <div className="border-l-4 border-blue-600 pl-6">
