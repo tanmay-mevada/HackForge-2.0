@@ -11,7 +11,6 @@ import {
   ShieldCheck, 
   Lock, 
   CreditCard, 
-  Printer,
   AlertCircle
 } from 'lucide-react'
 import { Toaster, toast } from 'sonner'
@@ -21,7 +20,7 @@ import UpiQr from '@/components/UpiQr'
 interface UploadData {
   file_name: string
   file_size: number
-  total_pages: number // Ensure this column exists in DB logic or defaults to 1
+  // Removed 'total_pages' to prevent DB errors
 }
 
 interface ShopData {
@@ -42,11 +41,14 @@ export default function PaymentPage() {
   const uploadId = searchParams.get('uploadId')
   const shopId = searchParams.get('shopId')
   
-  // Configuration (Defaulting to safe values if tampered)
+  // Get Pages from URL (Fallback to 1)
+  const pagesFromUrl = parseInt(searchParams.get('pages') || '1')
+
+  // Configuration
   const config = {
     color: (searchParams.get('color') || 'bw') as 'bw' | 'color',
     sides: (searchParams.get('sides') || 'single') as 'single' | 'double',
-    copies: Math.max(1, parseInt(searchParams.get('copies') || '1')), // Prevent 0 or negative
+    copies: Math.max(1, parseInt(searchParams.get('copies') || '1')),
     binding: (searchParams.get('binding') || 'none') as 'none' | 'staple' | 'spiral' | 'lamination'
   }
 
@@ -63,20 +65,23 @@ export default function PaymentPage() {
       try {
         if (!uploadId || !shopId) throw new Error('Invalid Transaction')
 
-        // 1. Get User Email for Payment Receipt
         const { data: { user } } = await supabase.auth.getUser()
         if (user?.email) setUserEmail(user.email)
 
-        // 2. Fetch Upload Details (To get accurate page count)
+        // 1. Fetch Upload Details 
+        // FIXED: Removed 'total_pages' from selection to stop the crash
         const { data: upload, error: uploadError } = await supabase
           .from('uploads')
-          .select('file_name, file_size, total_pages') // Assuming total_pages was saved in previous step
+          .select('file_name, file_size') 
           .eq('id', uploadId)
           .single()
 
-        if (uploadError) throw new Error('File not found')
+        if (uploadError) {
+            console.error("Upload Error:", uploadError)
+            throw new Error('File fetch failed')
+        }
 
-        // 3. Fetch Shop Details (To get accurate live prices)
+        // 2. Fetch Shop Details
         const { data: shop, error: shopError } = await supabase
           .from('shops')
           .select('name, location, bw_price, color_price, spiral_price, lamination_price')
@@ -88,9 +93,9 @@ export default function PaymentPage() {
         setUploadData(upload)
         setShopData(shop)
       } catch (err) {
-        console.error(err)
-        toast.error('Session expired or invalid. Redirecting...')
-        router.push('/dashboard')
+        console.error("Load Data Error:", err)
+        toast.error('Session invalid. Redirecting...')
+        router.push('/dashboard') 
       } finally {
         setLoading(false)
       }
@@ -98,26 +103,21 @@ export default function PaymentPage() {
     loadData()
   }, [uploadId, shopId, router, supabase])
 
-  // --- Secure Price Calculation (Re-calculated locally to prevent URL tampering) ---
+  // --- Secure Price Calculation ---
   const billDetails = useMemo(() => {
-    if (!shopData || !uploadData) return null
+    if (!shopData) return null
 
-    // Fallback to 1 page if detection failed previously
-    const pages = uploadData.total_pages || 1
+    // Use URL params for calculation (Stable)
+    const pages = pagesFromUrl
     
-    // Base Rates
     const baseRate = config.color === 'bw' ? shopData.bw_price : shopData.color_price
-    
-    // Logic
     const totalFaces = pages * config.copies
     const rawPrintCost = totalFaces * baseRate
     
-    // Discount
     const isDoubleSided = config.sides === 'double'
     const discountMultiplier = isDoubleSided ? 0.8 : 1
     const finalPrintCost = Math.ceil(rawPrintCost * discountMultiplier)
     
-    // Binding
     let bindingCost = 0
     if (config.binding === 'staple') bindingCost = 5
     if (config.binding === 'spiral') bindingCost = shopData.spiral_price || 25
@@ -131,7 +131,7 @@ export default function PaymentPage() {
       binding: bindingCost,
       total: finalPrintCost + bindingCost
     }
-  }, [shopData, uploadData, config])
+  }, [shopData, config, pagesFromUrl])
 
   if (loading || !billDetails) {
     return (
@@ -237,7 +237,6 @@ export default function PaymentPage() {
                 {/* Secure Form Submission */}
                 <div className="p-6 pt-0">
                    <form action="/api/payu/pay" method="POST" onSubmit={() => setProcessing(true)}>
-                      {/* Critical Hidden Fields - Using verified state data */}
                       <input type="hidden" name="amount" value={billDetails.total} />
                       <input type="hidden" name="productinfo" value={`Print Order ${uploadId?.substring(0,6)}`} />
                       <input type="hidden" name="firstname" value="Student" />
@@ -270,7 +269,7 @@ export default function PaymentPage() {
                 </div>
              </div>
 
-             {/* UPI Option (Visual Only - if you want manual UPI fallback) */}
+             {/* UPI Option */}
              <div className="mt-6">
                 <UpiQr amount={billDetails.total} />
              </div>
